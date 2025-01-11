@@ -1,6 +1,8 @@
 package example
 
 import (
+	"fmt"
+
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/btcsuite/btcd/btcutil"
@@ -10,32 +12,20 @@ import (
 	"github.com/btcsuite/btcd/wire"
 )
 
-func Pay2TaprootByKeyPathAddr(prvkey *btcec.PrivateKey, net *chaincfg.Params) btcutil.Address {
+func Pay2TaprootByKeyPathTx(netwk *chaincfg.Params, prvkey *btcec.PrivateKey,
+	prevTxid *chainhash.Hash, prevPkScript []byte, prevTxout int, prevAmountSat, curAmountSat int64) *wire.MsgTx {
 	// We use bip68 here
 	pubKey := txscript.ComputeTaprootKeyNoScript(prvkey.PubKey())
-
-	witnessProg := schnorr.SerializePubKey(pubKey)
-
-	addr, err := btcutil.NewAddressTaproot(witnessProg, net)
+	address, err := btcutil.NewAddressTaproot(schnorr.SerializePubKey(pubKey), netwk)
 	if err != nil {
 		panic(err)
 	}
+	fmt.Println("P2TR Address:", address)
 
-	return addr
-}
-
-func Pay2TaprootByKeyPathTx(prvkey *btcec.PrivateKey,
-	prevTxid *chainhash.Hash, prevPkScript []byte, prevTxout int, prevAmountSat, curAmountSat int64) *wire.MsgTx {
 	newtx := wire.NewMsgTx(2)
-
-	// txout to p2pr
+	// txout
 	{
-		pubKey := txscript.ComputeTaprootKeyNoScript(prvkey.PubKey())
-
-		output, err := txscript.NewScriptBuilder().
-			AddOp(txscript.OP_1).
-			AddData(schnorr.SerializePubKey(pubKey)).
-			Script()
+		output, err := txscript.PayToAddrScript(address)
 		if err != nil {
 			panic(err)
 		}
@@ -47,14 +37,17 @@ func Pay2TaprootByKeyPathTx(prvkey *btcec.PrivateKey,
 	{
 		txin := wire.NewTxIn(wire.NewOutPoint(prevTxid, uint32(prevTxout)), nil, nil)
 		newtx.AddTxIn(txin)
+	}
 
+	// sign
+	for txIdx, txin := range newtx.TxIn {
 		sigHashes := txscript.NewTxSigHashes(newtx,
 			txscript.NewCannedPrevOutputFetcher(prevPkScript, prevAmountSat))
 
-		witSig, err := txscript.TaprootWitnessSignature(
+		txin.Witness, err = txscript.TaprootWitnessSignature(
 			newtx,
 			sigHashes,
-			0, // idx, **the current tx input index that we want to sign**
+			txIdx,
 			prevAmountSat,
 			prevPkScript,
 			txscript.SigHashDefault,
@@ -63,7 +56,6 @@ func Pay2TaprootByKeyPathTx(prvkey *btcec.PrivateKey,
 		if err != nil {
 			panic(err)
 		}
-		txin.Witness = witSig
 	}
 
 	return newtx

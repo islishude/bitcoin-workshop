@@ -11,11 +11,11 @@ import (
 	"github.com/btcsuite/btcd/wire"
 )
 
-func Pay2PubkeyHash(prvkey *btcec.PrivateKey, prevTxHash *chainhash.Hash, prevTxOut uint32, prevAmount, fee int64) *wire.MsgTx {
-	var regtest = &chaincfg.RegressionNetParams
+func Pay2PubkeyHash(netwk *chaincfg.Params, prvkey *btcec.PrivateKey,
+	prevTxHash *chainhash.Hash, prevTxOut uint32, prevAmount, fee int64) *wire.MsgTx {
 
 	pubkeyHash := btcutil.Hash160(prvkey.PubKey().SerializeCompressed())
-	address, err := btcutil.NewAddressPubKeyHash(pubkeyHash, regtest)
+	address, err := btcutil.NewAddressPubKeyHash(pubkeyHash, netwk)
 	if err != nil {
 		panic(err)
 	}

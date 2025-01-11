@@ -13,11 +13,8 @@ import (
 	"github.com/btcsuite/btcd/wire"
 )
 
-func CreateP2WSHMultiSigTx() *wire.MsgTx {
-	var regtest = &chaincfg.RegressionNetParams
-
-	alice, bob, cario := NewKey(), NewKey(), NewKey()
-
+func CreateP2WSHMultiSigTx(netwk *chaincfg.Params, alice, bob, cario *btcec.PrivateKey,
+	prevTxHash *chainhash.Hash, prevTxOut uint32, prevAmountSat, fee int64) *wire.MsgTx {
 	redeemScript, err := txscript.NewScriptBuilder().
 		AddOp(txscript.OP_2).
 		AddData(alice.PubKey().SerializeCompressed()).
@@ -35,13 +32,8 @@ func CreateP2WSHMultiSigTx() *wire.MsgTx {
 	// add txin
 	{
 		// the current tx input index
-		const prevTxout = 1
-		prevTxid, err := chainhash.NewHashFromStr("fc137fe8d6678787912186b72616bd44c78077ec9b5fbbaa5338f991d426b392")
-		if err != nil {
-			panic(err)
-		}
 
-		txin := wire.NewTxIn(wire.NewOutPoint(prevTxid, uint32(prevTxout)), nil, nil)
+		txin := wire.NewTxIn(wire.NewOutPoint(prevTxHash, prevTxOut), nil, nil)
 		txin.Sequence = wire.MaxTxInSequenceNum - 5 // let it be replaceable
 		newtx.AddTxIn(txin)
 	}
@@ -49,7 +41,7 @@ func CreateP2WSHMultiSigTx() *wire.MsgTx {
 	// add txout
 	{
 		scriptHash := sha256.Sum256(redeemScript)
-		address, err := btcutil.NewAddressWitnessScriptHash(scriptHash[:], regtest)
+		address, err := btcutil.NewAddressWitnessScriptHash(scriptHash[:], netwk)
 		if err != nil {
 			panic(err)
 		}
@@ -59,14 +51,12 @@ func CreateP2WSHMultiSigTx() *wire.MsgTx {
 		if err != nil {
 			panic(err)
 		}
-		txout := wire.NewTxOut(1e8-1e3, output)
+		txout := wire.NewTxOut(prevAmountSat-fee, output)
 		newtx.AddTxOut(txout)
 	}
 
 	// sign
 	for txIdx, TxIn := range newtx.TxIn {
-		const prevAmountSat = 1e8
-
 		sigHashes := txscript.NewTxSigHashes(newtx,
 			txscript.NewCannedPrevOutputFetcher(redeemScript, prevAmountSat))
 
@@ -90,28 +80,50 @@ func CreateP2WSHMultiSigTx() *wire.MsgTx {
 	return newtx
 }
 
-func CreateBip112P2wsh(aliceKey, bobKey *btcec.PrivateKey, prevTxHash *chainhash.Hash, prevTxout uint32, prevAmountSat, fee int64) *wire.MsgTx {
-	var regtest = &chaincfg.RegressionNetParams
+/*
+Bip112 example
 
-	var cond1 [32]byte // commitment using timelock
-	var cond2 [32]byte // commitment using multi-sig
+Lock script:
 
-	// time lock
-	const blockLockNumber = 2 // <= 2 ** 16
+	OP_HASH160 OP_DUP <commitmentForTimeLock> OP_EQUAL
+	OP_IF
+		OP_DROP
+		<timeLockNumber> OP_CHECKSEQUENCEVERIFY OP_DROP
+		<alicePubkey> OP_CHECKSIG
+	OP_ELSE
+		<commitmentForMulsig> OP_EQUAL_VERIFY
+		OP_2 <alicePubkey> <bobPubkey> OP_2 OP_CHECKMULTISIG
+	OP_ENDIF
+
+Unlock using timelock:
+
+	<aliceSig> <timelock preimage>
+
+Unlock using multi-sig:
+
+	OP_0 <aliceSig> <bobSig> <mulsig preimage>
+*/
+func CreateBip112P2wsh(netwk *chaincfg.Params, aliceKey, bobKey *btcec.PrivateKey, prevTxHash *chainhash.Hash,
+	prevTxout uint32, prevAmountSat, fee int64, timeLockNumber uint16, useTimelock bool,
+	timelockPreimage, mulsigPreimage []byte) *wire.MsgTx {
+
+	commitmentForTimeLock := btcutil.Hash160(timelockPreimage)
+	commitmentForMulsig := btcutil.Hash160(mulsigPreimage)
 
 	redeemScript, err := txscript.NewScriptBuilder().
+		AddOp(txscript.OP_HASH160).
 		AddOp(txscript.OP_DUP).
-		AddData(cond1[:]).
+		AddData(commitmentForTimeLock).
 		AddOp(txscript.OP_EQUAL).
 		AddOp(txscript.OP_IF).
 		AddOp(txscript.OP_DROP).
-		AddInt64(blockLockNumber).
+		AddInt64(int64(timeLockNumber)).
 		AddOp(txscript.OP_CHECKSEQUENCEVERIFY).
 		AddOp(txscript.OP_DROP).
 		AddData(bobKey.PubKey().SerializeCompressed()).
 		AddOp(txscript.OP_CHECKSIG).
 		AddOp(txscript.OP_ELSE).
-		AddData(cond2[:]).
+		AddData(commitmentForMulsig).
 		AddOp(txscript.OP_EQUALVERIFY).
 		AddOp(txscript.OP_2).
 		AddData(aliceKey.PubKey().SerializeCompressed()).
@@ -125,7 +137,7 @@ func CreateBip112P2wsh(aliceKey, bobKey *btcec.PrivateKey, prevTxHash *chainhash
 	}
 
 	witnessProg := sha256.Sum256(redeemScript)
-	address, err := btcutil.NewAddressWitnessScriptHash(witnessProg[:], regtest)
+	address, err := btcutil.NewAddressWitnessScriptHash(witnessProg[:], netwk)
 	if err != nil {
 		panic(err)
 	}
@@ -137,7 +149,7 @@ func CreateBip112P2wsh(aliceKey, bobKey *btcec.PrivateKey, prevTxHash *chainhash
 	}
 	fmt.Println("p2wsh pkScript", hex.EncodeToString(prevPkScript))
 
-	newtx := wire.NewMsgTx(2)
+	newtx := wire.NewMsgTx(2) // tx version must be 2 to use bip-112
 
 	// txout to the internal tss group address
 	{
@@ -149,59 +161,53 @@ func CreateBip112P2wsh(aliceKey, bobKey *btcec.PrivateKey, prevTxHash *chainhash
 		newtx.AddTxOut(txout)
 	}
 
-	// txin using mulsig
-	{
-		const txIdx = 0
+	if useTimelock {
+		txin := wire.NewTxIn(wire.NewOutPoint(prevTxHash, uint32(prevTxout)), nil, nil)
+		// the sequence number must be equal with the defined before
+		txin.Sequence = uint32(timeLockNumber)
+		newtx.AddTxIn(txin)
+	} else {
 		txin := wire.NewTxIn(wire.NewOutPoint(prevTxHash, uint32(prevTxout)), nil, nil)
 		newtx.AddTxIn(txin)
+	}
 
+	// sign
+	for txIdx, txin := range newtx.TxIn {
 		sigHashes := txscript.NewTxSigHashes(newtx,
 			txscript.NewCannedPrevOutputFetcher(prevPkScript, prevAmountSat))
 
-		sig0, err := txscript.RawTxInWitnessSignature(
-			newtx, sigHashes, txIdx,
-			prevAmountSat, redeemScript,
-			txscript.SigHashAll, aliceKey,
-		)
-		if err != nil {
-			panic(err)
-		}
-
-		sig1, err := txscript.RawTxInWitnessSignature(
-			newtx, sigHashes, txIdx,
+		aliceSig, err := txscript.RawTxInWitnessSignature(
+			newtx,
+			sigHashes,
+			txIdx,
 			prevAmountSat,
-			redeemScript, // the actual script to be signed
-			txscript.SigHashAll, bobKey,
+			redeemScript,
+			txscript.SigHashAll,
+			aliceKey,
 		)
 		if err != nil {
 			panic(err)
 		}
 
-		txin.Witness = wire.TxWitness{[]byte{}, sig0, sig1, cond2[:], redeemScript}
+		// txin using time lock
+		if useTimelock {
+			txin.Witness = wire.TxWitness{aliceSig, timelockPreimage, redeemScript}
+		} else {
+			bobSig, err := txscript.RawTxInWitnessSignature(
+				newtx,
+				sigHashes,
+				txIdx,
+				prevAmountSat,
+				redeemScript, // the actual script to signed
+				txscript.SigHashAll,
+				bobKey,
+			)
+			if err != nil {
+				panic(err)
+			}
+			txin.Witness = wire.TxWitness{[]byte{}, aliceSig, bobSig, mulsigPreimage, redeemScript}
+		}
 	}
-
-	// txin using time lock
-	// {
-	// 	const txIdx = 0
-	// 	txin := wire.NewTxIn(wire.NewOutPoint(prevTxHash, uint32(prevTxout)), nil, nil)
-	// 	txin.Sequence = blockLockNumber
-	// 	newtx.AddTxIn(txin)
-
-	// 	sigHashes := txscript.NewTxSigHashes(newtx,
-	// 		txscript.NewCannedPrevOutputFetcher(prevPkScript, prevAmountSat))
-
-	// 	sig1, err := txscript.RawTxInWitnessSignature(
-	// 		newtx, sigHashes, txIdx,
-	// 		prevAmountSat,
-	// 		redeemScript, // the actual script to be signed
-	// 		txscript.SigHashAll, bobKey,
-	// 	)
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
-
-	// 	txin.Witness = wire.TxWitness{sig1, cond1[:], redeemScript}
-	// }
 
 	return newtx
 }

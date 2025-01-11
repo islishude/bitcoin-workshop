@@ -1,6 +1,9 @@
 package example
 
 import (
+	"fmt"
+
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -8,11 +11,8 @@ import (
 	"github.com/btcsuite/btcd/wire"
 )
 
-func Pay2ScriptHashTx() *wire.MsgTx {
-	var regtest = &chaincfg.RegressionNetParams
-
-	alice, bob, cario := NewKey(), NewKey(), NewKey()
-
+func Pay2ScriptHashTx(netwk *chaincfg.Params, alice, bob, cario *btcec.PrivateKey,
+	prevTxHash *chainhash.Hash, prevTxOut uint32, prevAmountSat, fee int64) *wire.MsgTx {
 	redeemScript, err := txscript.NewScriptBuilder().
 		AddOp(txscript.OP_2).
 		AddData(alice.PubKey().SerializeUncompressed()).
@@ -26,54 +26,51 @@ func Pay2ScriptHashTx() *wire.MsgTx {
 		panic(err)
 	}
 
-	address, err := btcutil.NewAddressScriptHash(redeemScript, regtest)
+	address, err := btcutil.NewAddressScriptHash(redeemScript, netwk)
 	if err != nil {
 		panic(err)
 	}
+	fmt.Println("P2SH address:", address)
 
 	newtx := wire.NewMsgTx(2)
 
+	// txout to the address
 	{
-		// txout to the address
-		{
-			output, err := txscript.PayToAddrScript(address)
-			if err != nil {
-				panic(err)
-			}
-			txout := wire.NewTxOut(1e4, output)
-			newtx.AddTxOut(txout)
+		output, err := txscript.PayToAddrScript(address)
+		if err != nil {
+			panic(err)
+		}
+		txout := wire.NewTxOut(prevAmountSat-fee, output)
+		newtx.AddTxOut(txout)
+	}
+
+	// txin
+	{
+		txin := wire.NewTxIn(wire.NewOutPoint(prevTxHash, prevTxOut), nil, nil)
+		newtx.AddTxIn(txin)
+	}
+
+	// sign
+	for txIdx, txIn := range newtx.TxIn {
+		aliceSig, err := txscript.RawTxInSignature(newtx, txIdx, redeemScript, txscript.SigHashAll, alice)
+		if err != nil {
+			panic(err)
 		}
 
-		// txin
-		{
-			const txIdx = 0
-			prevTxid, err := chainhash.NewHashFromStr("702f4a9215e537bcadc4c9d470dc49ff7a987b5a770ae2653244b773886c5315")
-			if err != nil {
-				panic(err)
-			}
-			txin := wire.NewTxIn(wire.NewOutPoint(prevTxid, 1), nil, nil)
-			newtx.AddTxIn(txin)
+		bobSig, err := txscript.RawTxInSignature(newtx, txIdx, redeemScript, txscript.SigHashAll, bob)
+		if err != nil {
+			panic(err)
+		}
 
-			aliceSig, err := txscript.RawTxInSignature(newtx, txIdx, redeemScript, txscript.SigHashAll, alice)
-			if err != nil {
-				panic(err)
-			}
-
-			bobSig, err := txscript.RawTxInSignature(newtx, txIdx, redeemScript, txscript.SigHashAll, bob)
-			if err != nil {
-				panic(err)
-			}
-
-			signatureScript, err := txscript.NewScriptBuilder().
-				AddOp(txscript.OP_0).
-				AddData(aliceSig).
-				AddData(bobSig).
-				AddData(redeemScript).Script()
-			if err != nil {
-				panic(err)
-			}
-			newtx.TxIn[0].SignatureScript = signatureScript
+		txIn.SignatureScript, err = txscript.NewScriptBuilder().
+			AddOp(txscript.OP_0).
+			AddData(aliceSig).
+			AddData(bobSig).
+			AddData(redeemScript).Script()
+		if err != nil {
+			panic(err)
 		}
 	}
+
 	return newtx
 }
