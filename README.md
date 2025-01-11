@@ -11,6 +11,7 @@
 - [pay to taproot using key path](./example/p2trkey.go)
 - [pay to taproot using script path](./example/p2trpath.go)
 - [musig2](./example/musig2.go)
+- [replace by fee](./example/rbf.go)
 
 ## regtest
 
