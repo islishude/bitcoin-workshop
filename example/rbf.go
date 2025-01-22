@@ -12,7 +12,7 @@ import (
 )
 
 // https://github.com/bitcoin/bips/blob/master/bip-0125.mediawiki
-func ReplaceByFee(netwk *chaincfg.Params, prvkey *btcec.PrivateKey, prevTxHash *chainhash.Hash, prevTxOut uint32, prevAmount int64) {
+func ReplaceByFee(netwk *chaincfg.Params, prvkey *btcec.PrivateKey, prevTxHash *chainhash.Hash, prevTxOut uint32, prevAmount, fee int64) {
 	pubkeyHash := btcutil.Hash160(prvkey.PubKey().SerializeCompressed())
 	address, err := btcutil.NewAddressPubKeyHash(pubkeyHash, netwk)
 	if err != nil {
@@ -27,11 +27,13 @@ func ReplaceByFee(netwk *chaincfg.Params, prvkey *btcec.PrivateKey, prevTxHash *
 
 	newtx := wire.NewMsgTx(2)
 
-	const fee1 = 1e3
-
 	// txout to the address
 	{
-		txout := wire.NewTxOut(prevAmount-fee1, subScript)
+		value := prevAmount - fee
+		if value < 546 {
+			panic("the amount is too small")
+		}
+		txout := wire.NewTxOut(prevAmount-fee, subScript)
 		newtx.AddTxOut(txout)
 	}
 
@@ -56,11 +58,16 @@ func ReplaceByFee(netwk *chaincfg.Params, prvkey *btcec.PrivateKey, prevTxHash *
 	// Increase the sequence number, but it's optional
 	newtx.TxIn[0].Sequence += 1
 
+	// the default minRelayFeeRate is 1 satoshi per byte
+	minRelayFeeRate := int64(1)
+	minRelayFee := int64(newtx.SerializeSize()) * minRelayFeeRate
+
 	// replace by fee
-	const fee2 = fee1 + 100
-	for i := range newtx.TxOut {
-		newtx.TxOut[i] = wire.NewTxOut(prevAmount-fee2, subScript)
+	fee2 := fee + minRelayFee
+	if prevAmount-fee2 < 546 {
+		panic("the amount is too small")
 	}
+	newtx.TxOut[0] = wire.NewTxOut(prevAmount-fee2, subScript)
 
 	// sign for the rbf
 	for txIdx, txIn := range newtx.TxIn {
