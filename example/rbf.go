@@ -38,7 +38,9 @@ func ReplaceByFee(netwk *chaincfg.Params, prvkey *btcec.PrivateKey, prevTxHash *
 	// txin
 	{
 		txin := wire.NewTxIn(wire.NewOutPoint(prevTxHash, prevTxOut), nil, nil)
-		txin.Sequence = wire.MaxTxInSequenceNum - 2
+		// if the 0xfffffffe > nSequence > 0x80000000, the tx is replaceable
+		// the highest bit must be 1 to signal that it doesn't use (bip68)[https://github.com/bitcoin/bips/blob/master/bip-0068.mediawiki]
+		txin.Sequence = 0xfffffff0
 		newtx.AddTxIn(txin)
 	}
 
@@ -50,6 +52,9 @@ func ReplaceByFee(netwk *chaincfg.Params, prvkey *btcec.PrivateKey, prevTxHash *
 		}
 		txIn.SignatureScript = sig
 	}
+
+	// Increase the sequence number, but it's optional
+	newtx.TxIn[0].Sequence += 1
 
 	// replace by fee
 	const fee2 = fee1 + 100
