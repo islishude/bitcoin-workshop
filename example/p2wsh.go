@@ -28,11 +28,24 @@ func CreateP2WSHMultiSigTx(netwk *chaincfg.Params, alice, bob, cario *btcec.Priv
 		panic(err)
 	}
 
+	witnessProg := sha256.Sum256(redeemScript)
+	address, err := btcutil.NewAddressWitnessScriptHash(witnessProg[:], netwk)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("p2wsh address", address)
+
+	prevPkScript, err := txscript.NewScriptBuilder().AddOp(txscript.OP_0).AddData(witnessProg[:]).Script()
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("p2wsh pkScript", hex.EncodeToString(prevPkScript))
+
 	newtx := wire.NewMsgTx(2)
+
 	// add txin
 	{
 		// the current tx input index
-
 		txin := wire.NewTxIn(wire.NewOutPoint(prevTxHash, prevTxOut), nil, nil)
 		txin.Sequence = wire.MaxTxInSequenceNum - 5 // let it be replaceable
 		newtx.AddTxIn(txin)
@@ -40,13 +53,6 @@ func CreateP2WSHMultiSigTx(netwk *chaincfg.Params, alice, bob, cario *btcec.Priv
 
 	// add txout
 	{
-		scriptHash := sha256.Sum256(redeemScript)
-		address, err := btcutil.NewAddressWitnessScriptHash(scriptHash[:], netwk)
-		if err != nil {
-			panic(err)
-		}
-		fmt.Println("P2WSH Address:", address)
-
 		output, err := txscript.PayToAddrScript(address)
 		if err != nil {
 			panic(err)
@@ -58,7 +64,7 @@ func CreateP2WSHMultiSigTx(netwk *chaincfg.Params, alice, bob, cario *btcec.Priv
 	// sign
 	for txIdx, TxIn := range newtx.TxIn {
 		sigHashes := txscript.NewTxSigHashes(newtx,
-			txscript.NewCannedPrevOutputFetcher(redeemScript, prevAmountSat))
+			txscript.NewCannedPrevOutputFetcher(prevPkScript, prevAmountSat))
 
 		aliceSig, err := txscript.RawTxInWitnessSignature(newtx,
 			sigHashes, txIdx, prevAmountSat, redeemScript, txscript.SigHashAll, alice)
